@@ -64,11 +64,9 @@ class MeshService : Service() {
     /** Newest message number seen for each trip. Older or same = duplicate, ignore it. */
     private val latestSeq = HashMap<Int, Int>()
 
-    // Simulated ambulance (Hyderabad, moving slowly north-east)
+    // Ambulance trip (no GPS used; location bytes in the message are sent as 0)
     private val tripId = Random.nextInt(1000, 9999)
     private var seq = 0
-    private var lat = 17.4435
-    private var lon = 78.3772
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -103,8 +101,7 @@ class MeshService : Service() {
     private val ambulanceTick = object : Runnable {
         override fun run() {
             seq = (seq + 1) and 0xFFFF
-            lat += 0.00015; lon += 0.00010
-            val msg = AlertMessage(tripId, seq, MAX_HOPS, lat, lon)
+            val msg = AlertMessage(tripId, seq, MAX_HOPS, 0.0, 0.0)
             latestSeq[tripId] = seq
             advertise(msg, stopAfterMs = 0)
             MeshBus.log("SENT trip $tripId #$seq hops=$MAX_HOPS")
@@ -155,8 +152,7 @@ class MeshService : Service() {
         val how = if (relayedTimes == 0) "DIRECT from ambulance" else "RELAYED $relayedTimes time(s)"
         MeshBus.log("GOT trip ${msg.tripId} #${msg.seq} $how, rssi $rssi, from ${from.takeLast(5)}")
 
-        val text = "AMBULANCE NEARBY\nGive way\n\nTrip ${msg.tripId} • msg #${msg.seq}\n$how\n" +
-            "Signal $rssi dBm\nAmbulance at %.5f, %.5f".format(msg.lat, msg.lon)
+        val text = "AMBULANCE NEARBY\nGive way\n\nTrip ${msg.tripId} • msg #${msg.seq}\n$how"
         MeshBus.alert(text)
         showAlertNotification(how)
 

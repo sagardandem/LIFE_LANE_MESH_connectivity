@@ -73,8 +73,10 @@ class MainActivity : AppCompatActivity() {
     // ---------- start with permissions ----------
 
     private fun neededPermissions(): Array<String> {
-        val list = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 31) {
+        val list = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT <= 30) {
+            list += Manifest.permission.ACCESS_FINE_LOCATION   // old phones only
+        } else {
             list += Manifest.permission.BLUETOOTH_SCAN
             list += Manifest.permission.BLUETOOTH_ADVERTISE
             list += Manifest.permission.BLUETOOTH_CONNECT
@@ -95,7 +97,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (missingRequired.isNotEmpty()) {
-            Toast.makeText(this, "Bluetooth and Location permissions are needed", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Bluetooth permissions are needed", Toast.LENGTH_LONG).show()
             return
         }
         alert.visibility = View.GONE
