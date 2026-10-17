@@ -10,6 +10,7 @@ object MeshBus {
     val logs = ArrayDeque<String>()
     var lastAlert: String? = null
     var running: String? = null   // "AMBULANCE", "RELAY" or null
+        private set                 // change it with setRunning() so the screen is notified
 
     var onLog: ((String) -> Unit)? = null
     var onAlert: ((String) -> Unit)? = null
