@@ -1,5 +1,6 @@
 package com.lifelane.ble
 
+import android.os.ParcelUuid
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import javax.crypto.Mac
@@ -72,6 +73,14 @@ class AlertMessage(
 
         /** Test company ID (0xFFFF is reserved for testing by the Bluetooth SIG). */
         const val COMPANY_ID = 0xFFFF
+
+        /**
+         * LifeLane service ID (free 128-bit UUID we generated ourselves).
+         * Sent in the main broadcast so iPhones can find us even with the screen locked
+         * (Apple only allows background scanning for a specific service ID).
+         * The 20-byte message itself goes in the scan response.
+         */
+        val SERVICE_UUID: ParcelUuid = ParcelUuid.fromString("C51EB7FB-9202-43B3-B906-DC0E1B471453")
 
         /**
          * PROTOTYPE ONLY: a shared secret built into the app.

@@ -223,12 +223,10 @@ class MeshService : Service() {
     private fun setScanFast(fast: Boolean) {
         if (fastScan == fast) return
         runCatching { scanner?.stopScan(scanCallback) }
+        // Match on the LifeLane service ID (in the main broadcast); the message is read from the scan response.
         val filter = ScanFilter.Builder()
-            .setManufacturerData(
-                AlertMessage.COMPANY_ID,
-                byteArrayOf(AlertMessage.MAGIC),
-                byteArrayOf(0xFF.toByte())
-            ).build()
+            .setServiceUuid(AlertMessage.SERVICE_UUID)
+            .build()
         val b = ScanSettings.Builder()
             .setScanMode(if (fast) ScanSettings.SCAN_MODE_LOW_LATENCY else ScanSettings.SCAN_MODE_BALANCED)
         if (codedSupported) {
@@ -341,13 +339,27 @@ class MeshService : Service() {
         val adv = advertiser ?: return
         stopAdvertising()
 
-        val data = AdvertiseData.Builder()
+        // Main broadcast: LifeLane service ID (18 bytes) - lets iPhones find us in the background.
+        val mainData = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceUuid(AlertMessage.SERVICE_UUID)
+            .build()
+        // Scan response: the 20-byte message (24 bytes with header).
+        val response = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .addManufacturerData(AlertMessage.COMPANY_ID, msg.toBytes())
             .build()
+        // Long-range (extended) broadcasts have room for both in one packet.
+        val fullData = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceUuid(AlertMessage.SERVICE_UUID)
+            .addManufacturerData(AlertMessage.COMPANY_ID, msg.toBytes())
+            .build()
 
-        // 1) Normal broadcast - every phone can hear this
+        // 1) Normal broadcast - every phone (Android and iPhone) can hear this
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(
@@ -363,7 +375,7 @@ class MeshService : Service() {
             }
         }
         legacyCb = cb
-        adv.startAdvertising(settings, data, cb)
+        adv.startAdvertising(settings, mainData, response, cb)
 
         // 2) Extra long-range copy (Bluetooth 5 "Coded PHY") if enabled and supported
         if (longRange) {
@@ -385,7 +397,7 @@ class MeshService : Service() {
                 }
             }
             codedCb = scb
-            runCatching { adv.startAdvertisingSet(params, data, null, null, null, scb) }
+            runCatching { adv.startAdvertisingSet(params, fullData, null, null, null, scb) }
                 .onFailure { MeshBus.log("Long-range send error: ${it.message}") }
         }
 

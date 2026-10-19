@@ -19,6 +19,11 @@ Prototype note: the key is built into the app. A real system would give keys onl
 
 Version 2 is **not compatible** with version 1 – install the new APK on all phones.
 
+**iPhone support:** the main broadcast carries the LifeLane service ID
+`C51EB7FB-9202-43B3-B906-DC0E1B471453` (a free 128-bit UUID we generated). The 20-byte message is in the
+**scan response**. iPhones can only scan in the background for a specific service ID, so this is what lets a
+locked iPhone get alerts. Long-range broadcasts carry both in one packet.
+
 ## Get the app
 Push to GitHub → **Actions** → **Build APK** → download **LifeLane-BLE-apk** → install `app-debug.apk`.
 
@@ -42,3 +47,32 @@ Tip: tick **Short range** on all phones to test chains inside one room.
 - Turn on **Bluetooth**. Location is not needed on Android 12+ (needed on Android 11 and older).
 - Allow the permissions the app asks for.
 - Some brands (Xiaomi, Oppo, Vivo, Realme) may stop background apps: set Battery → "No restrictions" for the app.
+
+## iPhone app (receive only) – folder `ios/`
+Apple only lets iPhone apps broadcast a device name and service IDs, and nothing readable by Android while in
+the background. So **iPhones receive alerts but cannot relay or act as the ambulance.** Sources: Apple
+"Best Practices for Setting Up Your Local Device as a Peripheral" and "Core Bluetooth Background Processing".
+
+What it does: scans for the LifeLane service ID (also when locked), checks the signature, shows a red alert and
+a notification, green "AMBULANCE PASSED" on trip end, clears after 15 s with no signal.
+In the background iOS may give only the service ID without the message; then the app still warns
+("unverified") but cannot check the signature.
+
+### Build and install (no Mac needed)
+1. GitHub Actions → **Build iOS** → download **LifeLane-iOS-ipa** → unzip → `LifeLane-unsigned.ipa`.
+2. On Windows install **iTunes** (from apple.com, not the Microsoft Store version) and **Sideloadly** (sideloadly.io).
+3. Connect the iPhone by cable, open Sideloadly, drop in the .ipa, enter your Apple ID, click Start.
+4. On the iPhone: Settings → General → VPN & Device Management → trust your Apple ID.
+   On iOS 16+ also turn on Settings → Privacy & Security → **Developer Mode**.
+5. Open LifeLane, allow Bluetooth and notifications.
+
+With a free Apple ID the app stops opening after **7 days** – reinstall with Sideloadly.
+
+### iPhone tests
+| Test | Expected |
+|---|---|
+| Android A = Ambulance, iPhone open | Red alert "DIRECT from ambulance" |
+| A → Android B relay, iPhone near B only | "RELAYED 1 time(s)" |
+| Lock the iPhone | Notification "Ambulance nearby – give way" |
+| Stop A | Green "AMBULANCE PASSED" |
+| A sends FAKE alert | Log "REJECTED fake alert", no alert |

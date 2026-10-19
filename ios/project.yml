@@ -1,0 +1,32 @@
+name: LifeLane
+options:
+  bundleIdPrefix: com.lifelane
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  LifeLane:
+    type: application
+    platform: iOS
+    sources: [LifeLane]
+    info:
+      path: LifeLane/Info.plist
+      properties:
+        CFBundleDisplayName: LifeLane
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSBluetoothAlwaysUsageDescription: "LifeLane uses Bluetooth to receive nearby ambulance alerts, even without internet."
+        UIBackgroundModes: [bluetooth-central]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lifelane.ble.ios
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+schemes:
+  LifeLane:
+    build:
+      targets:
+        LifeLane: all
