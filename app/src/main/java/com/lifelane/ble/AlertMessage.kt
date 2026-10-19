@@ -1,44 +1,90 @@
 package com.lifelane.ble
 
 import java.nio.ByteBuffer
+import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
- * The alert that travels phone to phone over Bluetooth.
- * Packed into 17 bytes so it fits in one normal BLE advertisement (31 bytes max).
+ * The message that travels phone to phone over Bluetooth (version 2, 20 bytes).
+ * Fits in one normal BLE advertisement (31 bytes max).
  *
  * Byte layout:
- *  0      magic 'L' (0x4C) - lets us ignore other Bluetooth devices
- *  1      version (1)
- *  2..5   tripId    - which ambulance trip
- *  6..7   seq       - message number, goes up every 2 seconds
- *  8      hopsLeft  - how many more times it may be passed on
- *  9..12  lat * 1,000,000
- *  13..16 lon * 1,000,000
+ *  0       magic 'L' (0x4C) - lets us ignore other Bluetooth devices
+ *  1       version (2)
+ *  2..5    tripId    - which ambulance trip
+ *  6..7    seq       - message number, goes up every second
+ *  8       maxHops   - hop limit chosen by the ambulance (3 or 5)
+ *  9       type      - 0 = ALERT, 1 = TRIP ENDED (ambulance passed)
+ *  10      hopsLeft  - how many more times it may be passed on (changes at each relay)
+ *  11      senderId  - random id of the phone that sent THIS copy (changes at each relay)
+ *  12..19  signature - first 8 bytes of HMAC-SHA256 over bytes 0..9
+ *
+ * hopsLeft and senderId are NOT signed, because relaying phones change them.
  */
-data class AlertMessage(
+class AlertMessage(
     val tripId: Int,
     val seq: Int,
+    val maxHops: Int,
+    val type: Int,
     val hopsLeft: Int,
-    val lat: Double,
-    val lon: Double,
+    val senderId: Int,
+    val signature: ByteArray = ByteArray(SIG_SIZE),
 ) {
-    fun toBytes(): ByteArray = ByteBuffer.allocate(SIZE)
-        .put(MAGIC)
-        .put(VERSION)
+    /** How many phones passed this copy on before it reached us. 0 = straight from the ambulance. */
+    val relayedTimes: Int get() = maxHops - hopsLeft
+
+    fun copy(hopsLeft: Int = this.hopsLeft, senderId: Int = this.senderId) =
+        AlertMessage(tripId, seq, maxHops, type, hopsLeft, senderId, signature)
+
+    /** Ambulance only: add the secret signature. */
+    fun signed() = AlertMessage(tripId, seq, maxHops, type, hopsLeft, senderId, sign(header()))
+
+    /** Test only: a message with a wrong signature, like a fake ambulance would send. */
+    fun withFakeSignature() = AlertMessage(tripId, seq, maxHops, type, hopsLeft, senderId, ByteArray(SIG_SIZE) { 0x5A })
+
+    fun isGenuine(): Boolean = MessageDigest.isEqual(signature, sign(header()))
+
+    private fun header(): ByteArray = ByteBuffer.allocate(SIGNED_SIZE)
+        .put(MAGIC).put(VERSION)
         .putInt(tripId)
         .putShort(seq.toShort())
+        .put(maxHops.toByte())
+        .put(type.toByte())
+        .array()
+
+    fun toBytes(): ByteArray = ByteBuffer.allocate(SIZE)
+        .put(header())
         .put(hopsLeft.toByte())
-        .putInt((lat * 1_000_000).toInt())
-        .putInt((lon * 1_000_000).toInt())
+        .put(senderId.toByte())
+        .put(signature)
         .array()
 
     companion object {
-        const val SIZE = 17
+        const val SIZE = 20
+        private const val SIGNED_SIZE = 10
+        private const val SIG_SIZE = 8
         const val MAGIC: Byte = 0x4C
-        const val VERSION: Byte = 1
+        const val VERSION: Byte = 2
+
+        const val TYPE_ALERT = 0
+        const val TYPE_END = 1
 
         /** Test company ID (0xFFFF is reserved for testing by the Bluetooth SIG). */
         const val COMPANY_ID = 0xFFFF
+
+        /**
+         * PROTOTYPE ONLY: a shared secret built into the app.
+         * In a real system only ambulances would hold the key (e.g. public-key signatures
+         * issued by 108), so a normal phone could check alerts but not create them.
+         */
+        private val KEY = "LifeLane-demo-key-2026".toByteArray()
+
+        private fun sign(data: ByteArray): ByteArray {
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(KEY, "HmacSHA256"))
+            return mac.doFinal(data).copyOf(SIG_SIZE)
+        }
 
         fun fromBytes(b: ByteArray?): AlertMessage? {
             if (b == null || b.size < SIZE || b[0] != MAGIC || b[1] != VERSION) return null
@@ -46,10 +92,13 @@ data class AlertMessage(
             buf.position(2)
             val tripId = buf.int
             val seq = buf.short.toInt() and 0xFFFF
-            val hops = buf.get().toInt()
-            val lat = buf.int / 1_000_000.0
-            val lon = buf.int / 1_000_000.0
-            return AlertMessage(tripId, seq, hops, lat, lon)
+            val maxHops = buf.get().toInt()
+            val type = buf.get().toInt()
+            val hopsLeft = buf.get().toInt()
+            val senderId = buf.get().toInt() and 0xFF
+            val sig = ByteArray(SIG_SIZE).also { buf.get(it) }
+            if (maxHops !in 1..7 || hopsLeft !in 0..maxHops || type !in 0..1) return null
+            return AlertMessage(tripId, seq, maxHops, type, hopsLeft, senderId, sig)
         }
     }
 }

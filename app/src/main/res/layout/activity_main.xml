@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="12dp">
 
     <TextView
         android:id="@+id/status"
@@ -13,36 +13,98 @@
         android:textSize="16sp"
         android:textStyle="bold" />
 
-    <Button
-        android:id="@+id/btnAmbulance"
+    <!-- Controls scroll if the screen is small -->
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="Phone A: Start as AMBULANCE" />
+        android:layout_height="0dp"
+        android:layout_weight="1.2">
 
-    <Button
-        android:id="@+id/btnRelay"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Phone B / C: Start as RECEIVER + RELAY" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
 
-    <CheckBox
-        android:id="@+id/chkIgnoreDirect"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Test (use on phone C): ignore direct ambulance signal, accept only relayed" />
+            <!-- Ambulance -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="AMBULANCE (Phone A)"
+                android:textSize="12sp"
+                android:textStyle="bold" />
 
-    <CheckBox
-        android:id="@+id/chkShortRange"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Short range (very low power) for room testing" />
+            <Button
+                android:id="@+id/btnAmbulance"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Start as AMBULANCE" />
 
-    <Button
-        android:id="@+id/btnStop"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Stop" />
+            <CheckBox
+                android:id="@+id/chkFiveHops"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Long chain: allow 5 hops (default 3)" />
+
+            <CheckBox
+                android:id="@+id/chkFake"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Security test: send FAKE alert (wrong signature)" />
+
+            <!-- Receiver -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="RECEIVER + RELAY (Phones B, C, D...)"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnRelay"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Start as RECEIVER + RELAY" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Chain test: accept only alerts relayed at least" />
+
+            <Spinner
+                android:id="@+id/spinMinRelays"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+
+            <!-- Both -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="RANGE (all phones)"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <CheckBox
+                android:id="@+id/chkShortRange"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Short range (very low power) for room testing" />
+
+            <CheckBox
+                android:id="@+id/chkLongRange"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Long range mode (Bluetooth 5)" />
+
+            <Button
+                android:id="@+id/btnStop"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Stop" />
+        </LinearLayout>
+    </ScrollView>
 
     <TextView
         android:id="@+id/alert"
@@ -51,9 +113,9 @@
         android:layout_marginTop="8dp"
         android:background="#D32F2F"
         android:gravity="center"
-        android:padding="16dp"
+        android:padding="12dp"
         android:textColor="#FFFFFF"
-        android:textSize="18sp"
+        android:textSize="17sp"
         android:visibility="gone" />
 
     <ScrollView
@@ -69,6 +131,7 @@
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
             android:padding="8dp"
+            android:textColor="#222222"
             android:textSize="11sp" />
     </ScrollView>
 </LinearLayout>

@@ -1,41 +1,44 @@
 # LifeLane – Bluetooth relay prototype (Member 3)
 
-Sends an ambulance alert from phone to phone over Bluetooth, with **no internet**.
-Phone A (ambulance) → Phone B (relay) → Phone C.
+Sends an ambulance alert from phone to phone over Bluetooth, with **no internet and no GPS** (Android 12+).
+Every phone that should get alerts needs this app installed.
 
-## How it works
-- **Ambulance (Phone A)** broadcasts a small 17-byte alert every 2 seconds.
-- **Receiver + Relay (Phones B, C)** listen. When a *new* alert arrives they show it and send it on again.
-- Each alert can be passed on at most **3 times** (`hopsLeft` 3 → 2 → 1 → 0).
-- Duplicates are ignored using `tripId` + message number.
-- A small random wait (50–200 ms) before relaying stops phones sending at the same time.
+## How it works (version 2)
+- **Ambulance** broadcasts a signed 20-byte alert every **1 second**. On **Stop** it broadcasts **"trip ended"** for 4 s.
+- **Receiver + Relay** phones show the alert and pass it on, up to **3 or 5 hops**.
+- **Smart relay:** if 2 other phones already passed the same alert on, a phone stays quiet. Stops jamming on busy roads.
+- **Far-first:** phones with a weaker signal (further away) pass it on sooner, so the alert spreads outward faster.
+- **Fake ambulance protection:** alerts carry a signature; alerts with a wrong signature are rejected.
+- **Auto-expire:** no new alert for 15 s → alert clears. "Trip ended" → green **AMBULANCE PASSED**.
+- **Battery saver:** slow scan when idle, fast scan while an alert is active.
+- **Long range (Bluetooth 5):** optional extra long-range broadcast on phones that support it.
 
-Alert format (17 bytes): `magic 'L' | version | tripId(4) | seq(2) | hopsLeft(1) | lat(4) | lon(4)`
+Message (20 bytes): `magic | version=2 | tripId(4) | seq(2) | maxHops | type | hopsLeft | senderId | signature(8)`
+Signature = first 8 bytes of HMAC-SHA256 over the first 10 bytes.
+Prototype note: the key is built into the app. A real system would give keys only to ambulances (e.g. issued by 108).
 
-## Get the app (no Android Studio needed)
-1. Push this folder to GitHub.
-2. Open the repo → **Actions** tab → **Build APK** → open the latest run.
-3. Download **LifeLane-BLE-apk** (zip) at the bottom, unzip, copy `app-debug.apk` to the phones and install it (allow "Install unknown apps").
+Version 2 is **not compatible** with version 1 – install the new APK on all phones.
 
-## 3-phone test
-| Phone | What to do |
-|---|---|
-| A | Tap **Start as AMBULANCE** |
-| B | Tap **Start as RECEIVER + RELAY** |
-| C | Tick **ignore direct ambulance signal**, then tap **Start as RECEIVER + RELAY** |
+## Get the app
+Push to GitHub → **Actions** → **Build APK** → download **LifeLane-BLE-apk** → install `app-debug.apk`.
 
-Phone C should show **"RELAYED 1 time(s)"**. That proves the alert went A → B → C.
-Then stop Phone B: Phone C should stop getting new alerts.
+## Tests
+| Test | Setup | Expected |
+|---|---|---|
+| Basic | A = Ambulance, B = Receiver | B shows red alert "DIRECT" |
+| Chain A→B→C | C: chain test = "1 time" | C shows "RELAYED 1 time(s)" |
+| Chain A→B→C→D | C = "1 time", D = "2 times" | D shows "RELAYED 2 time(s)" |
+| 5 hops | A: tick "allow 5 hops" | Alerts can go up to 5 phones deep |
+| Ambulance passed | Tap Stop on A | Receivers turn green "AMBULANCE PASSED" |
+| Auto-expire | Turn off Bluetooth on A | Receivers clear alert after 15 s |
+| Fake ambulance | A: tick "send FAKE alert" | Receivers log "REJECTED fake alert", no alert shown |
+| Smart relay | 4+ receivers close together | Some log "SKIPPED relay … other phones already relayed it" |
+| Battery saver | Watch the log on a receiver | "Scan: SLOW" when idle, "Scan: FAST" during an alert |
+| Long range | Tick "Long range" on A (if enabled) | Compare max distance with/without |
 
-Tip: tick **Short range** on all phones to test distance in a small space.
+Tip: tick **Short range** on all phones to test chains inside one room.
 
 ## Before testing
-- Turn on **Bluetooth** and **Location** on all phones.
-- Allow all permissions the app asks for.
-- Android 8.0 or newer. iPhones are not supported.
-
-## Things to record for the report
-- Range: at what distance does B stop receiving? (open area, inside a car)
-- Delay per hop (compare log times on each phone)
-- Does it work with the screen off?
-- Battery used in 1 hour
+- Turn on **Bluetooth**. Location is not needed on Android 12+ (needed on Android 11 and older).
+- Allow the permissions the app asks for.
+- Some brands (Xiaomi, Oppo, Vivo, Realme) may stop background apps: set Battery → "No restrictions" for the app.
