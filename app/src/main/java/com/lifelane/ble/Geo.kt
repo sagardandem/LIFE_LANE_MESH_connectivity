@@ -51,6 +51,9 @@ object Geo {
     /**
      * myLat/myLon null = phone has no GPS fix. myHeading null = direction unknown (not moving).
      */
+    const val PASSED_M = 20.0           // ambulance more than 20 m past me (along its direction) = passed
+    const val SIDE_M = 100.0            // more than 100 m to the side of the ambulance's line = other road
+
     fun decide(
         ambLat: Double, ambLon: Double, ambHeading: Double,
         myLat: Double?, myLon: Double?, myHeading: Double?,
@@ -61,13 +64,12 @@ object Geo {
         val dist = distanceM(ambLat, ambLon, myLat, myLon)
         if (dist > ALERT_DISTANCE_M) return Decision(Level.NONE, "far away (${dist.toInt()} m)")
 
-        // Very close: position alone can't say ahead/behind reliably
-        if (dist > 30) {
-            val toMe = bearing(ambLat, ambLon, myLat, myLon)
-            if (angleDiff(toMe, ambHeading) > AHEAD_ANGLE) {
-                return Decision(Level.NONE, "behind / beside ambulance (${dist.toInt()} m)")
-            }
-        }
+        // Split the distance into "along the ambulance's direction" and "to the side".
+        val theta = Math.toRadians(bearing(ambLat, ambLon, myLat, myLon) - ambHeading)
+        val along = dist * cos(theta)          // + = ahead of ambulance, - = behind
+        val side = abs(dist * sin(theta))
+        if (along < -PASSED_M) return Decision(Level.NONE, "behind ambulance - passed (${(-along).toInt()} m)")
+        if (side > SIDE_M) return Decision(Level.NONE, "beside / other road (${side.toInt()} m to the side)")
         if (myHeading == null) {
             return Decision(Level.AMBER, "ahead, ${dist.toInt()} m - my direction unknown")
         }

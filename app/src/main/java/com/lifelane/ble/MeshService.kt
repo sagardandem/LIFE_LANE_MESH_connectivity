@@ -74,7 +74,10 @@ class MeshService : Service() {
         const val SUPPRESS_AFTER = 2
         const val TEST_OFFSET_M = 200.0
         const val FIX_MAX_AGE_MS = 30_000L
-        const val BEARING_MAX_AGE_MS = 20_000L
+        const val BEARING_MAX_AGE_MS = 120_000L   // remember direction 2 min (car stopped at a signal)
+        const val MIN_SPEED_MPS = 0.7f            // walking speed counts as moving
+        const val BUDDY_MIN_MS = 10_000L          // a "travel buddy" must be heard steadily for 10 s
+        const val BUDDY_GAP_MS = 3_000L           // silence longer than this = buddy left
 
         private const val CH_SERVICE = "service"
         private const val CH_ALERT = "alert"
@@ -205,12 +208,28 @@ class MeshService : Service() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    private var bearingAnchor: Location? = null   // earlier fix, to work out direction from movement
+
     private val locListener = object : LocationListener {
         override fun onLocationChanged(loc: Location) {
             lastFix = loc
-            if (loc.hasBearing() && loc.hasSpeed() && loc.speed > 1.5f) {
+            val now = SystemClock.elapsedRealtime()
+            if (loc.hasBearing() && loc.hasSpeed() && loc.speed > MIN_SPEED_MPS) {
                 lastBearing = loc.bearing.toDouble()
-                lastBearingAt = SystemClock.elapsedRealtime()
+                lastBearingAt = now
+                bearingAnchor = loc
+                return
+            }
+            // Fallback: direction from two fixes at least 10 m apart (slow walking, some phones)
+            val a = bearingAnchor
+            if (a == null) { bearingAnchor = loc; return }
+            val moved = a.distanceTo(loc)
+            if (moved >= 10f) {
+                lastBearing = Geo.bearing(a.latitude, a.longitude, loc.latitude, loc.longitude)
+                lastBearingAt = now
+                bearingAnchor = loc
+            } else if ((loc.elapsedRealtimeNanos - a.elapsedRealtimeNanos) > 60_000_000_000L) {
+                bearingAnchor = loc   // stood still for a minute - start again from here
             }
         }
         override fun onProviderEnabled(provider: String) {}
@@ -352,6 +371,8 @@ class MeshService : Service() {
             return
         }
 
+        recordNeighbor(msg, rssi)
+
         val key = "${msg.tripId}:${msg.seq}"
         val last = latestSeq[msg.tripId]
         if (last != null && msg.seq == last) {
@@ -371,13 +392,36 @@ class MeshService : Service() {
         if (msg.type == AlertMessage.TYPE_END) {
             MeshBus.log("GOT trip ${msg.tripId} ENDED ($how)")
             clearAlert(passed = true, why = "Ambulance passed - alert cleared")
-            relayLater(msg, rssi)
+            relayLater(msg, rssi, AlertMessage.LVL_UNKNOWN)
             return
         }
 
-        // Decide with MY OWN GPS whether this driver is in the ambulance's way
+        // 1) Decide with MY OWN GPS whether this driver is in the ambulance's way
         val fix = myFix()
-        val d = Geo.decide(msg.lat, msg.lon, msg.heading, fix?.latitude, fix?.longitude, myHeading())
+        var d = Geo.decide(msg.lat, msg.lon, msg.heading, fix?.latitude, fix?.longitude, myHeading())
+
+        // 2) Not sure (no GPS / no direction)? Follow my "travel buddy": a nearby phone that IS sure,
+        //    heard steadily for 10 s (same-direction cars stay near; opposite-direction cars pass in seconds).
+        var viaBuddy = false
+        if (d.level == Geo.Level.AMBER) {
+            val buddy = findBuddy(msg.tripId)
+            if (buddy != null) {
+                viaBuddy = true
+                d = if (buddy.second.level == AlertMessage.LVL_RED) {
+                    Geo.Decision(Geo.Level.RED, "travel buddy #${buddy.first} is in the ambulance's way")
+                } else {
+                    Geo.Decision(Geo.Level.NONE, "travel buddy #${buddy.first} is not in the ambulance's way")
+                }
+            }
+        }
+
+        // What I tell others: only my OWN sure decisions (not copied from a buddy)
+        val myLevel = when {
+            viaBuddy -> AlertMessage.LVL_UNKNOWN
+            d.level == Geo.Level.RED -> AlertMessage.LVL_RED
+            d.level == Geo.Level.AMBER -> AlertMessage.LVL_AMBER
+            else -> AlertMessage.LVL_CLEAR
+        }
 
         val logLine = "#${msg.seq} $how rssi $rssi -> ${d.level}: ${d.reason}"
         // Log every message while the decision changes, otherwise every 5th to keep the log readable
@@ -399,26 +443,74 @@ class MeshService : Service() {
                 showAlertNotification("Ambulance nearby - be alert", d.reason)
             }
             Geo.Level.NONE -> {
-                if (alertActive) clearAlert(passed = true, why = "No longer in ambulance's way (${d.reason})")
+                if (alertActive) {
+                    if (d.reason.contains("passed")) {
+                        clearAlert(passed = true, why = "Ambulance passed (${d.reason})")
+                    } else {
+                        alertActive = false
+                        MeshBus.clearAlert()
+                        runCatching { getSystemService(NotificationManager::class.java).cancel(ID_ALERT) }
+                        MeshBus.log("Alert removed - ${d.reason}")
+                    }
+                }
             }
         }
 
         // Always pass it on, even if this driver isn't alerted - phones further ahead may need it
-        relayLater(msg, rssi)
+        relayLater(msg, rssi, myLevel)
     }
 
-    private fun relayLater(msg: AlertMessage, rssi: Int) {
-        if (msg.hopsLeft <= 0) return
+    // ---------------- TRAVEL BUDDY ----------------
+
+    private class Neighbor(var firstHeard: Long, var lastHeard: Long, var rssiAvg: Double, var level: Int, var tripId: Int)
+    private val neighbors = HashMap<Int, Neighbor>()
+
+    /** Remember every nearby phone that tells us its own decision. */
+    private fun recordNeighbor(msg: AlertMessage, rssi: Int) {
+        if (msg.type != AlertMessage.TYPE_ALERT || msg.senderLevel == AlertMessage.LVL_UNKNOWN) return
+        val now = SystemClock.elapsedRealtime()
+        val n = neighbors[msg.senderId]
+        if (n == null || now - n.lastHeard > BUDDY_GAP_MS || n.tripId != msg.tripId) {
+            neighbors[msg.senderId] = Neighbor(now, now, rssi.toDouble(), msg.senderLevel, msg.tripId)
+        } else {
+            n.lastHeard = now
+            n.rssiAvg = 0.8 * n.rssiAvg + 0.2 * rssi
+            n.level = msg.senderLevel
+        }
+    }
+
+    /** The phone that is SURE (red or clear), heard steadily for 10 s, with the strongest signal. */
+    private fun findBuddy(tripId: Int): Pair<Int, Neighbor>? {
+        val now = SystemClock.elapsedRealtime()
+        neighbors.entries.removeAll { now - it.value.lastHeard > 30_000 }
+        return neighbors.entries
+            .filter { (_, n) ->
+                n.tripId == tripId &&
+                    now - n.lastHeard <= BUDDY_GAP_MS &&
+                    n.lastHeard - n.firstHeard >= BUDDY_MIN_MS &&
+                    (n.level == AlertMessage.LVL_RED || n.level == AlertMessage.LVL_CLEAR)
+            }
+            .maxByOrNull { it.value.rssiAvg }
+            ?.let { it.key to it.value }
+    }
+
+    // ---------------- RELAY ----------------
+
+    private fun relayLater(msg: AlertMessage, rssi: Int, myLevel: Int) {
+        val iAmRed = myLevel == AlertMessage.LVL_RED
+        // Phones in the ambulance's way always broadcast (so no-GPS phones near them can follow them),
+        // even when the hop limit is used up.
+        if (msg.hopsLeft <= 0 && !iAmRed) return
         pendingRelay?.let { handler.removeCallbacks(it) }
 
         pendingKey = "${msg.tripId}:${msg.seq}"
         pendingFrom = msg.senderId
         otherRelayers.clear()
 
-        val fwd = msg.copy(hopsLeft = msg.hopsLeft - 1, senderId = myId)
+        val fwd = msg.copy(hopsLeft = maxOf(msg.hopsLeft - 1, 0), senderId = myId, senderLevel = myLevel)
         val task = Runnable {
             pendingRelay = null
-            if (otherRelayers.size >= SUPPRESS_AFTER) {
+            if (!iAmRed && otherRelayers.size >= SUPPRESS_AFTER) {
                 MeshBus.log("SKIPPED relay #${msg.seq}: ${otherRelayers.size} others already relayed")
                 return@Runnable
             }

@@ -2,10 +2,10 @@ import CoreBluetooth
 import CryptoKit
 import Foundation
 
-/// Same 27-byte message as the Android app (version 3).
+/// Same 27-byte message as the Android app (version 4).
 ///
 ///  0      magic 'L' (0x4C)
-///  1      version (3)
+///  1      version (4)
 ///  2..5   tripId (big-endian)
 ///  6..7   seq (big-endian)
 ///  8      maxHops
@@ -13,7 +13,7 @@ import Foundation
 ///  10..13 ambulance latitude  * 1,000,000 (signed, big-endian)
 ///  14..17 ambulance longitude * 1,000,000 (signed, big-endian)
 ///  18     ambulance heading (0..255 = 0..360 degrees)
-///  19     hopsLeft
+///  19     low 4 bits hopsLeft, bits 4-5 senderLevel (0 unknown, 1 RED, 2 AMBER, 3 CLEAR)
 ///  20     senderId
 ///  21..26 signature = first 6 bytes of HMAC-SHA256 over bytes 0..18
 struct AlertMessage {
@@ -24,6 +24,7 @@ struct AlertMessage {
     static let signedSize = 19
     static let typeAlert = 0
     static let typeEnd = 1
+    static let lvlUnknown = 0, lvlRed = 1, lvlAmber = 2, lvlClear = 3
 
     /// PROTOTYPE ONLY: same shared key as the Android app.
     private static let key = SymmetricKey(data: Data("LifeLane-demo-key-2026".utf8))
@@ -36,6 +37,8 @@ struct AlertMessage {
     let lon: Double
     let heading: Double
     let hopsLeft: Int
+    let senderId: Int
+    let senderLevel: Int
     let genuine: Bool
 
     var relayedTimes: Int { maxHops - hopsLeft }
@@ -48,7 +51,7 @@ struct AlertMessage {
         guard company == companyId else { return nil }
 
         let p = Array(b[2..<(2 + size)])
-        guard p[0] == 0x4C, p[1] == 3 else { return nil }
+        guard p[0] == 0x4C, p[1] == 4 else { return nil }
 
         func u32(_ i: Int) -> UInt32 {
             (UInt32(p[i]) << 24) | (UInt32(p[i + 1]) << 16) | (UInt32(p[i + 2]) << 8) | UInt32(p[i + 3])
@@ -60,7 +63,9 @@ struct AlertMessage {
         let lat = Double(Int32(bitPattern: u32(10))) / 1_000_000
         let lon = Double(Int32(bitPattern: u32(14))) / 1_000_000
         let heading = Double(p[18]) * 360 / 256
-        let hopsLeft = Int(p[19])
+        let hopsLeft = Int(p[19] & 0x0F)
+        let senderLevel = Int((p[19] >> 4) & 0x03)
+        let senderId = Int(p[20])
         guard (1...7).contains(maxHops), (0...maxHops).contains(hopsLeft), (0...1).contains(type) else { return nil }
 
         let mac = HMAC<SHA256>.authenticationCode(for: Data(p[0..<signedSize]), using: key)
@@ -68,7 +73,8 @@ struct AlertMessage {
         let genuine = expected == Array(p[21..<27])
 
         return AlertMessage(tripId: tripId, seq: seq, maxHops: maxHops, type: type,
-                            lat: lat, lon: lon, heading: heading, hopsLeft: hopsLeft, genuine: genuine)
+                            lat: lat, lon: lon, heading: heading, hopsLeft: hopsLeft,
+                            senderId: senderId, senderLevel: senderLevel, genuine: genuine)
     }
 }
 
@@ -111,12 +117,11 @@ enum Geo {
         }
         let dist = distance(ambLat, ambLon, myLat, myLon)
         if dist > alertDistance { return (.none, "far away (\(Int(dist)) m)") }
-        if dist > 30 {
-            let toMe = bearing(ambLat, ambLon, myLat, myLon)
-            if angleDiff(toMe, ambHeading) > aheadAngle {
-                return (.none, "behind / beside ambulance (\(Int(dist)) m)")
-            }
-        }
+        let theta = (bearing(ambLat, ambLon, myLat, myLon) - ambHeading) * .pi / 180
+        let along = dist * cos(theta)     // + ahead of ambulance, - behind
+        let side = abs(dist * sin(theta))
+        if along < -20 { return (.none, "behind ambulance - passed (\(Int(-along)) m)") }
+        if side > 100 { return (.none, "beside / other road (\(Int(side)) m to the side)") }
         guard let myHeading = myHeading else {
             return (.amber, "ahead, \(Int(dist)) m - my direction unknown")
         }

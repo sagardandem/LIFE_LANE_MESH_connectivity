@@ -65,7 +65,7 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
         lastFix = loc
-        if loc.course >= 0 && loc.speed > 1.5 {
+        if loc.course >= 0 && loc.speed > 0.7 {
             lastHeading = loc.course
             lastHeadingAt = Date()
         }
@@ -82,7 +82,7 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
 
     private func myHeading() -> Double? {
-        guard let h = lastHeading, Date().timeIntervalSince(lastHeadingAt) < 20 else { return nil }
+        guard let h = lastHeading, Date().timeIntervalSince(lastHeadingAt) < 120 else { return nil }   // remember 2 min
         return h
     }
 
@@ -128,6 +128,7 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
             return
         }
 
+        recordNeighbor(msg, rssi: RSSI.intValue)
         if let last = latestSeq[msg.tripId], !isNewer(msg.seq, than: last) { return }
         latestSeq[msg.tripId] = msg.seq
         lastHeardAt = Date()
@@ -140,9 +141,18 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
 
         let fix = myFix()
-        let (level, reason) = Geo.decide(ambLat: msg.lat, ambLon: msg.lon, ambHeading: msg.heading,
+        var (level, reason) = Geo.decide(ambLat: msg.lat, ambLon: msg.lon, ambHeading: msg.heading,
                                          myLat: fix?.coordinate.latitude, myLon: fix?.coordinate.longitude,
                                          myHeading: myHeading())
+        // Not sure? Follow my "travel buddy" - a nearby phone that is sure, heard steadily for 10 s.
+        if level == .amber, let buddy = findBuddy(trip: msg.tripId) {
+            let (id, n) = buddy
+            if n.level == AlertMessage.lvlRed {
+                level = .red; reason = "travel buddy #\(id) is in the ambulance's way"
+            } else {
+                level = .none; reason = "travel buddy #\(id) is not in the ambulance's way"
+            }
+        }
         let key = "\(level)\(reason.prefix(12))"
         if key != lastDecision || msg.seq % 5 == 0 {
             addLog("#\(msg.seq) \(how) rssi \(RSSI.intValue) -> \(level): \(reason)")
@@ -158,8 +168,49 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
             show(.amber("\(reason)\(tip)\nTrip \(msg.tripId) • \(how)"),
                  title: "🚑 Ambulance nearby - be alert", body: reason)
         case .none:
-            if alertShown { clearAsPassed("No longer in ambulance's way (\(reason))") }
+            if alertShown {
+                if reason.contains("passed") {
+                    clearAsPassed("Ambulance passed (\(reason))")
+                } else {
+                    alertShown = false
+                    banner = .none
+                    addLog("Alert removed - \(reason)")
+                    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["alert"])
+                }
+            }
         }
+    }
+
+    // MARK: Travel buddy
+
+    private struct Neighbor { var firstHeard: Date; var lastHeard: Date; var rssiAvg: Double; var level: Int; var tripId: UInt32 }
+    private var neighbors: [Int: Neighbor] = [:]
+
+    private func recordNeighbor(_ msg: AlertMessage, rssi: Int) {
+        guard msg.type == AlertMessage.typeAlert, msg.senderLevel != AlertMessage.lvlUnknown else { return }
+        let now = Date()
+        if var n = neighbors[msg.senderId], now.timeIntervalSince(n.lastHeard) <= 3, n.tripId == msg.tripId {
+            n.lastHeard = now
+            n.rssiAvg = 0.8 * n.rssiAvg + 0.2 * Double(rssi)
+            n.level = msg.senderLevel
+            neighbors[msg.senderId] = n
+        } else {
+            neighbors[msg.senderId] = Neighbor(firstHeard: now, lastHeard: now, rssiAvg: Double(rssi),
+                                               level: msg.senderLevel, tripId: msg.tripId)
+        }
+    }
+
+    private func findBuddy(trip: UInt32) -> (Int, Neighbor)? {
+        let now = Date()
+        neighbors = neighbors.filter { now.timeIntervalSince($0.value.lastHeard) <= 30 }
+        return neighbors
+            .filter { (_, n) in
+                n.tripId == trip && now.timeIntervalSince(n.lastHeard) <= 3 &&
+                    n.lastHeard.timeIntervalSince(n.firstHeard) >= 10 &&
+                    (n.level == AlertMessage.lvlRed || n.level == AlertMessage.lvlClear)
+            }
+            .max { $0.value.rssiAvg < $1.value.rssiAvg }
+            .map { ($0.key, $0.value) }
     }
 
     // MARK: Alert handling

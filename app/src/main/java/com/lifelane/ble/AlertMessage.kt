@@ -7,12 +7,12 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * The message that travels phone to phone over Bluetooth (version 3, 27 bytes).
+ * The message that travels phone to phone over Bluetooth (version 4, 27 bytes).
  * Sent in the scan response (31 bytes max = 4 bytes header + 27).
  *
  * Byte layout:
  *  0       magic 'L' (0x4C)
- *  1       version (3)
+ *  1       version (4)
  *  2..5    tripId
  *  6..7    seq       - message number, goes up every second
  *  8       maxHops   - hop limit (3 or 5)
@@ -20,9 +20,15 @@ import javax.crypto.spec.SecretKeySpec
  *  10..13  ambulance latitude  * 1,000,000
  *  14..17  ambulance longitude * 1,000,000
  *  18      ambulance heading (0..255 = 0..360 degrees)
- *  19      hopsLeft  - changes at each relay (not signed)
- *  20      senderId  - changes at each relay (not signed)
+ *  19      low 4 bits: hopsLeft, bits 4-5: senderLevel   (not signed - changes at each phone)
+ *  20      senderId  - random id of the phone that sent THIS copy (not signed)
  *  21..26  signature - first 6 bytes of HMAC-SHA256 over bytes 0..18
+ *
+ * senderLevel = the sending phone's OWN decision ("travel buddy" feature):
+ *   0 = unknown (source, or sender has no GPS/direction)
+ *   1 = RED   (sender is sure it is in the ambulance's way)
+ *   2 = AMBER (sender is ahead but not sure of its direction)
+ *   3 = CLEAR (sender is sure it is NOT in the ambulance's way)
  */
 class AlertMessage(
     val tripId: Int,
@@ -31,23 +37,22 @@ class AlertMessage(
     val type: Int,
     val lat: Double,
     val lon: Double,
-    val heading: Double,       // degrees 0..360
+    val heading: Double,
     val hopsLeft: Int,
     val senderId: Int,
+    val senderLevel: Int = LVL_UNKNOWN,
     val signature: ByteArray = ByteArray(SIG_SIZE),
 ) {
-    /** How many phones passed this copy on before it reached us. 0 = straight from the source. */
     val relayedTimes: Int get() = maxHops - hopsLeft
 
-    fun copy(hopsLeft: Int = this.hopsLeft, senderId: Int = this.senderId) =
-        AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, signature)
+    fun copy(hopsLeft: Int = this.hopsLeft, senderId: Int = this.senderId, senderLevel: Int = this.senderLevel) =
+        AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, senderLevel, signature)
 
-    /** Source only: add the secret signature. */
-    fun signed() = AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, sign(header()))
+    fun signed() =
+        AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, senderLevel, sign(header()))
 
-    /** Test only: a message with a wrong signature, like a fake ambulance would send. */
     fun withFakeSignature() =
-        AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, ByteArray(SIG_SIZE) { 0x5A })
+        AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, senderLevel, ByteArray(SIG_SIZE) { 0x5A })
 
     fun isGenuine(): Boolean = MessageDigest.isEqual(signature, sign(header()))
 
@@ -64,7 +69,7 @@ class AlertMessage(
 
     fun toBytes(): ByteArray = ByteBuffer.allocate(SIZE)
         .put(header())
-        .put(hopsLeft.toByte())
+        .put(((hopsLeft and 0x0F) or ((senderLevel and 0x03) shl 4)).toByte())
         .put(senderId.toByte())
         .put(signature)
         .array()
@@ -74,19 +79,19 @@ class AlertMessage(
         private const val SIGNED_SIZE = 19
         private const val SIG_SIZE = 6
         const val MAGIC: Byte = 0x4C
-        const val VERSION: Byte = 3
+        const val VERSION: Byte = 4
 
         const val TYPE_ALERT = 0
         const val TYPE_END = 1
 
-        /** Test company ID (0xFFFF is reserved for testing by the Bluetooth SIG). */
+        const val LVL_UNKNOWN = 0
+        const val LVL_RED = 1
+        const val LVL_AMBER = 2
+        const val LVL_CLEAR = 3
+
         const val COMPANY_ID = 0xFFFF
 
-        /**
-         * LIFELANE service ID (free 128-bit UUID we generated ourselves).
-         * Sent in the main broadcast so iPhones can find us even with the screen locked.
-         * The message itself goes in the scan response.
-         */
+        /** LIFELANE service ID (free 128-bit UUID). In the main broadcast so iPhones can find us when locked. */
         val SERVICE_UUID: ParcelUuid = ParcelUuid.fromString("C51EB7FB-9202-43B3-B906-DC0E1B471453")
 
         /** PROTOTYPE ONLY: shared key built into the app. A real system gives keys only to verified sources. */
@@ -114,12 +119,14 @@ class AlertMessage(
             val lat = buf.int / 1_000_000.0
             val lon = buf.int / 1_000_000.0
             val heading = (buf.get().toInt() and 0xFF) * 360.0 / 256
-            val hopsLeft = buf.get().toInt()
+            val packed = buf.get().toInt() and 0xFF
+            val hopsLeft = packed and 0x0F
+            val senderLevel = (packed shr 4) and 0x03
             val senderId = buf.get().toInt() and 0xFF
             val sig = ByteArray(SIG_SIZE).also { buf.get(it) }
             if (maxHops !in 1..7 || hopsLeft !in 0..maxHops || type !in 0..1) return null
             if (lat !in -90.0..90.0 || lon !in -180.0..180.0) return null
-            return AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, sig)
+            return AlertMessage(tripId, seq, maxHops, type, lat, lon, heading, hopsLeft, senderId, senderLevel, sig)
         }
     }
 }

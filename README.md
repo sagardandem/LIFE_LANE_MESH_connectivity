@@ -13,7 +13,7 @@ Every phone that should get alerts needs this app installed.
 - **Battery saver:** slow scan when idle, fast scan while an alert is active.
 - **Long range (Bluetooth 5):** optional extra long-range broadcast on phones that support it.
 
-Message (27 bytes, v3): `magic | version=3 | tripId(4) | seq(2) | maxHops | type | lat(4) | lon(4) | heading | hopsLeft | senderId | signature(6)`
+Message (27 bytes, v4): `magic | version=4 | tripId(4) | seq(2) | maxHops | type | lat(4) | lon(4) | heading | hopsLeft+senderLevel | senderId | signature(6)`
 Signature = first 6 bytes of HMAC-SHA256 over the first 19 bytes.
 Prototype note: the key is built into the app. A real system would give keys only to ambulances (e.g. issued by 108).
 
@@ -24,7 +24,29 @@ Version 2 is **not compatible** with version 1 – install the new APK on all ph
 **scan response**. iPhones can only scan in the background for a specific service ID, so this is what lets a
 locked iPhone get alerts. Long-range broadcasts carry both in one packet.
 
-## Version 3 – same-direction alerts (latest)
+## Version 4 – travel buddy + fixes (latest)
+**Travel buddy:** phones that are SURE (GPS + direction) add their own decision to what they broadcast
+(RED = in the ambulance's way, CLEAR = not). A phone that is NOT sure (GPS off, or not moving) follows its
+"travel buddy": a sure phone it has heard **steadily for 10 s** with the strongest signal. Same-direction cars
+stay near you; opposite-direction cars pass in seconds, so they never become your buddy. If the buddy leaves,
+it switches to the next one. Phones in the ambulance's way (RED) always broadcast, so no-GPS phones near them
+can follow them. Copied decisions are never re-broadcast as "sure".
+
+**Fixes from testing:**
+- Walking now counts as moving (0.7 m/s; also direction from two GPS points 10 m apart).
+- Direction remembered for **2 minutes** (car stopped at a signal still gets RED).
+- "Passed" rule: ambulance **more than 20 m past you** along its direction → 🟢 green (no need to stop the trip).
+- More than 100 m to the side of the ambulance's line → other road → silent.
+- Version 4 is not compatible with version 3 – update all phones.
+
+### Travel-buddy tests
+| Phone A (source) | Phone B (sure) | Phone C (not sure) | Expected on C |
+|---|---|---|---|
+| North, 200 m BEFORE | my direction **North** → B is 🔴 | **Location OFF**, keep near B | 🟡 first, then 🔴 "travel buddy … in the ambulance's way" after ~10 s |
+| North, 200 m BEFORE | my direction **South** → B is silent | Location OFF, near B | 🟡 first, then silent "travel buddy … not in the way" |
+| North, 200 m BEFORE | North | Location OFF, B switched off after 15 s | goes back to 🟡 |
+
+## Version 3 – same-direction alerts
 The message now carries the **ambulance position + direction** (27 bytes, 6-byte signature). Every phone still
 relays it, but each phone decides with **its own GPS** (no internet needed) whether to show it:
 
