@@ -12,7 +12,7 @@ object Geo {
 
     const val ALERT_DISTANCE_M = 600.0   // ambulance within 600 m
     const val AHEAD_ANGLE = 60.0         // driver is in front of the ambulance (within ±60° of its heading)
-    const val SAME_DIR_ANGLE = 45.0      // driver heading within 45° of ambulance heading
+    const val SAME_DIR_ANGLE = 60.0      // driver heading within 60° of ambulance heading (GPS wobble, curves, lane changes)
 
     fun distanceM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val p1 = Math.toRadians(lat1); val p2 = Math.toRadians(lat2)

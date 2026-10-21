@@ -30,6 +30,8 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
 
     private var latestSeq: [UInt32: UInt16] = [:]
     private var alertShown = false
+    private var notInWayStreak = 0
+    private var dirX = 0.0, dirY = 0.0   // smoothed direction as a vector
     private var lastHeardAt: Date?
     private var passedAt: Date?
     private var lastNotifyAt = Date.distantPast
@@ -66,7 +68,17 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
         guard let loc = locations.last else { return }
         lastFix = loc
         if loc.course >= 0 && loc.speed > 0.7 {
-            lastHeading = loc.course
+            // Smooth the direction so one jumpy reading doesn't flip the decision
+            let r = loc.course * .pi / 180
+            if lastHeading == nil || Date().timeIntervalSince(lastHeadingAt) > 10 {
+                dirX = cos(r); dirY = sin(r)
+            } else {
+                dirX = 0.7 * dirX + 0.3 * cos(r)
+                dirY = 0.7 * dirY + 0.3 * sin(r)
+            }
+            var deg = atan2(dirY, dirX) * 180 / .pi
+            if deg < 0 { deg += 360 }
+            lastHeading = deg
             lastHeadingAt = Date()
         }
         gpsStatus = "GPS: ON (±\(Int(loc.horizontalAccuracy)) m)"
@@ -158,6 +170,14 @@ final class AlertReceiver: NSObject, ObservableObject, CBCentralManagerDelegate,
             addLog("#\(msg.seq) \(how) rssi \(RSSI.intValue) -> \(level): \(reason)")
             lastDecision = key
         }
+
+        // Don't drop an alert on one jumpy reading: need 3 "not in the way" readings in a row.
+        let wobbly = reason.hasPrefix("different direction") || reason.hasPrefix("beside")
+        if level == .none && alertShown && wobbly {
+            notInWayStreak += 1
+            if notInWayStreak < 3 { return }
+        }
+        if level != .none || !wobbly { notInWayStreak = 0 }
 
         switch level {
         case .red:

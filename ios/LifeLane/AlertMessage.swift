@@ -82,7 +82,7 @@ struct AlertMessage {
 enum Geo {
     static let alertDistance = 600.0
     static let aheadAngle = 60.0
-    static let sameDirAngle = 45.0
+    static let sameDirAngle = 60.0   // GPS wobble, curves, lane changes
 
     enum Level { case red, amber, none }
 

@@ -116,6 +116,7 @@ class MeshService : Service() {
 
     // Alert state
     private var alertActive = false
+    private var notInWayStreak = 0   // "different direction" readings in a row while alerted
     private var lastHeardAt = 0L
     private var fastScan: Boolean? = null
     private var lastFakeLogAt = 0L
@@ -124,7 +125,9 @@ class MeshService : Service() {
     // Location
     private var locationManager: LocationManager? = null
     private var lastFix: Location? = null
-    private var lastBearing: Double? = null
+    private var lastBearing: Double? = null      // SMOOTHED direction of travel
+    private var dirX = 0.0                        // smoothing: running average of direction as a vector
+    private var dirY = 0.0
     private var lastBearingAt = 0L
     private var lastGpsWaitLogAt = 0L
 
@@ -215,7 +218,7 @@ class MeshService : Service() {
             lastFix = loc
             val now = SystemClock.elapsedRealtime()
             if (loc.hasBearing() && loc.hasSpeed() && loc.speed > MIN_SPEED_MPS) {
-                lastBearing = loc.bearing.toDouble()
+                addBearing(loc.bearing.toDouble())
                 lastBearingAt = now
                 bearingAnchor = loc
                 return
@@ -225,7 +228,7 @@ class MeshService : Service() {
             if (a == null) { bearingAnchor = loc; return }
             val moved = a.distanceTo(loc)
             if (moved >= 10f) {
-                lastBearing = Geo.bearing(a.latitude, a.longitude, loc.latitude, loc.longitude)
+                addBearing(Geo.bearing(a.latitude, a.longitude, loc.latitude, loc.longitude))
                 lastBearingAt = now
                 bearingAnchor = loc
             } else if ((loc.elapsedRealtimeNanos - a.elapsedRealtimeNanos) > 60_000_000_000L) {
@@ -236,6 +239,19 @@ class MeshService : Service() {
         override fun onProviderDisabled(provider: String) {}
         @Deprecated("Deprecated in Java")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+    }
+
+    /** Smooth the direction: average recent readings so one jumpy GPS reading doesn't flip the decision. */
+    private fun addBearing(deg: Double) {
+        val r = Math.toRadians(deg)
+        val fresh = SystemClock.elapsedRealtime() - lastBearingAt > 10_000 || lastBearing == null
+        if (fresh) {
+            dirX = Math.cos(r); dirY = Math.sin(r)
+        } else {
+            dirX = 0.7 * dirX + 0.3 * Math.cos(r)
+            dirY = 0.7 * dirY + 0.3 * Math.sin(r)
+        }
+        lastBearing = (Math.toDegrees(Math.atan2(dirY, dirX)) + 360) % 360
     }
 
     private fun startLocation() {
@@ -430,6 +446,18 @@ class MeshService : Service() {
             lastDecisionLog = d.level.name + d.reason.take(12)
         }
 
+        // Don't drop an alert on one jumpy reading: need 3 "not in the way" readings in a row.
+        // ("passed" and "far away" still clear at once.)
+        val wobbly = d.reason.startsWith("different direction") || d.reason.startsWith("beside")
+        if (d.level == Geo.Level.NONE && alertActive && wobbly) {
+            notInWayStreak++
+            if (notInWayStreak < 3) {
+                relayLater(msg, rssi, myLevel)
+                return
+            }
+        }
+        if (d.level != Geo.Level.NONE) notInWayStreak = 0
+
         when (d.level) {
             Geo.Level.RED -> {
                 alertActive = true
@@ -443,6 +471,7 @@ class MeshService : Service() {
                 showAlertNotification("Ambulance nearby - be alert", d.reason)
             }
             Geo.Level.NONE -> {
+                notInWayStreak = 0
                 if (alertActive) {
                     if (d.reason.contains("passed")) {
                         clearAlert(passed = true, why = "Ambulance passed (${d.reason})")
