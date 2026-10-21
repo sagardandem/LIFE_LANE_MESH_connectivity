@@ -6,14 +6,17 @@ import java.util.Locale
 
 /** Simple link between the background service and the screen. */
 object MeshBus {
+    const val LEVEL_RED = 0
+    const val LEVEL_AMBER = 1
+    const val LEVEL_GREEN = 2
+
     private val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     val logs = ArrayDeque<String>()
 
     /** Text in the big alert box, or null when nothing to show. */
     var lastAlert: String? = null
         private set
-    /** true = red "give way" box, false = green "ambulance passed" box. */
-    var lastAlertDanger = true
+    var lastAlertLevel = LEVEL_RED
         private set
 
     var running: String? = null   // "AMBULANCE", "RELAY" or null
@@ -30,9 +33,9 @@ object MeshBus {
         onLog?.invoke(line)
     }
 
-    fun alert(text: String, danger: Boolean = true) {
+    fun alert(text: String, level: Int) {
         lastAlert = text
-        lastAlertDanger = danger
+        lastAlertLevel = level
         onAlertChanged?.invoke()
     }
 

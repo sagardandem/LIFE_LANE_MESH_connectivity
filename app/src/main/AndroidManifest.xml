@@ -4,11 +4,13 @@
     <!-- Android 11 and below -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <!-- Old phones (Android 11 and below) need Location for Bluetooth scanning -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 
-    <!-- Android 12 and above: we promise not to use Bluetooth for location,
-         so scanning works even with GPS / Location turned OFF -->
+    <!-- GPS: source phone sends ambulance position; receivers check if they are in the ambulance's way.
+         Works without internet. Optional on receivers (without it they only get soft warnings). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Android 12 and above: Bluetooth itself is not used to find location -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
@@ -18,12 +20,14 @@
     <!-- Keep running with screen off -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <application
-        android:label="LifeLane BLE"
+        android:label="LIFELANE"
         android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
 
         <activity
@@ -39,6 +43,6 @@
         <service
             android:name=".MeshService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|location" />
     </application>
 </manifest>

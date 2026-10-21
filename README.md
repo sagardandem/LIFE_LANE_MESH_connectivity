@@ -1,4 +1,4 @@
-# LifeLane – Bluetooth relay prototype (Member 3)
+# LIFELANE – Bluetooth offline layer (Member 3)
 
 Sends an ambulance alert from phone to phone over Bluetooth, with **no internet and no GPS** (Android 12+).
 Every phone that should get alerts needs this app installed.
@@ -13,16 +13,43 @@ Every phone that should get alerts needs this app installed.
 - **Battery saver:** slow scan when idle, fast scan while an alert is active.
 - **Long range (Bluetooth 5):** optional extra long-range broadcast on phones that support it.
 
-Message (20 bytes): `magic | version=2 | tripId(4) | seq(2) | maxHops | type | hopsLeft | senderId | signature(8)`
-Signature = first 8 bytes of HMAC-SHA256 over the first 10 bytes.
+Message (27 bytes, v3): `magic | version=3 | tripId(4) | seq(2) | maxHops | type | lat(4) | lon(4) | heading | hopsLeft | senderId | signature(6)`
+Signature = first 6 bytes of HMAC-SHA256 over the first 19 bytes.
 Prototype note: the key is built into the app. A real system would give keys only to ambulances (e.g. issued by 108).
 
 Version 2 is **not compatible** with version 1 – install the new APK on all phones.
 
 **iPhone support:** the main broadcast carries the LifeLane service ID
-`C51EB7FB-9202-43B3-B906-DC0E1B471453` (a free 128-bit UUID we generated). The 20-byte message is in the
+`C51EB7FB-9202-43B3-B906-DC0E1B471453` (a free 128-bit UUID we generated). The message is in the
 **scan response**. iPhones can only scan in the background for a specific service ID, so this is what lets a
 locked iPhone get alerts. Long-range broadcasts carry both in one packet.
+
+## Version 3 – same-direction alerts (latest)
+The message now carries the **ambulance position + direction** (27 bytes, 6-byte signature). Every phone still
+relays it, but each phone decides with **its own GPS** (no internet needed) whether to show it:
+
+| Level | When |
+|---|---|
+| 🔴 RED "Give way" | within 600 m, **ahead** of the ambulance (±60°), and moving the **same direction** (±45°) |
+| 🟡 AMBER "Be alert" | ahead but my direction unknown (not moving), or my GPS is off |
+| silent | behind / beside, opposite direction, or more than 600 m away |
+| 🟢 "Passed" | was alerted, now behind the ambulance, or trip ended |
+
+- **Source phone (A)** = the ambulance, or an online phone that got the cloud alert. Needs location permission.
+- Receivers work without location permission too, but only get AMBER.
+- Version 3 is not compatible with version 2 – update all phones.
+
+### Direction tests (no driving needed – all phones in one place, outdoors or near a window)
+| Test | Phone A (source) | Phone B (receiver) | Expected on B |
+|---|---|---|---|
+| Same direction, ahead | direction **North**, position **200 m BEFORE this spot** | my direction **North** | 🔴 RED |
+| Opposite direction | North, 200 m BEFORE | my direction **South** | silent |
+| Crossing road | North, 200 m BEFORE | my direction **East** | silent |
+| Behind ambulance | North, **200 m AFTER this spot** | North | silent |
+| Direction unknown | North, 200 m BEFORE | **Auto**, standing still | 🟡 AMBER |
+| GPS off | North, 200 m BEFORE | Location OFF | 🟡 AMBER + "turn on location" |
+| Relay to wrong-side phone | A North/BEFORE, B = South, C = North with chain test "1 time" | – | B silent but still relays; C 🔴 RED |
+| Real drive | Auto + Real GPS in a moving vehicle | Auto, in a car ahead | 🔴 RED, then 🟢 when passed |
 
 ## Get the app
 Push to GitHub → **Actions** → **Build APK** → download **LifeLane-BLE-apk** → install `app-debug.apk`.

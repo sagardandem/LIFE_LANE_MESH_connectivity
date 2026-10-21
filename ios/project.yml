@@ -11,12 +11,13 @@ targets:
     info:
       path: LifeLane/Info.plist
       properties:
-        CFBundleDisplayName: LifeLane
+        CFBundleDisplayName: LIFELANE
         CFBundleShortVersionString: "0.1"
         CFBundleVersion: "1"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
-        NSBluetoothAlwaysUsageDescription: "LifeLane uses Bluetooth to receive nearby ambulance alerts, even without internet."
+        NSBluetoothAlwaysUsageDescription: "LIFELANE uses Bluetooth to receive nearby ambulance alerts, even without internet."
+        NSLocationWhenInUseUsageDescription: "LIFELANE uses your location (no internet needed) to alert you only when you are in the ambulance's way."
         UIBackgroundModes: [bluetooth-central]
     settings:
       base:

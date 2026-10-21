@@ -25,10 +25,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var log: TextView
     private lateinit var chkFiveHops: CheckBox
     private lateinit var chkFake: CheckBox
+    private lateinit var spinAmbHeading: Spinner
+    private lateinit var spinAmbPos: Spinner
+    private lateinit var spinMyHeading: Spinner
     private lateinit var spinMinRelays: Spinner
     private lateinit var chkShortRange: CheckBox
     private lateinit var chkLongRange: CheckBox
     private var pendingAction: String? = null
+
+    /** Direction choices: label -> degrees (-1 = from GPS while moving). */
+    private val headings = listOf(
+        "Auto (from GPS while moving)" to -1,
+        "TEST: North" to 0,
+        "TEST: East" to 90,
+        "TEST: South" to 180,
+        "TEST: West" to 270,
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,12 +51,23 @@ class MainActivity : AppCompatActivity() {
         log = findViewById(R.id.log)
         chkFiveHops = findViewById(R.id.chkFiveHops)
         chkFake = findViewById(R.id.chkFake)
+        spinAmbHeading = findViewById(R.id.spinAmbHeading)
+        spinAmbPos = findViewById(R.id.spinAmbPos)
+        spinMyHeading = findViewById(R.id.spinMyHeading)
         spinMinRelays = findViewById(R.id.spinMinRelays)
         chkShortRange = findViewById(R.id.chkShortRange)
         chkLongRange = findViewById(R.id.chkLongRange)
 
-        spinMinRelays.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item,
+        spinAmbHeading.adapter = adapter(headings.map { it.first })
+        spinMyHeading.adapter = adapter(headings.map { it.first })
+        spinAmbPos.adapter = adapter(
+            listOf(
+                "Real GPS position",
+                "TEST: 200 m BEFORE this spot (phones here are AHEAD)",
+                "TEST: 200 m AFTER this spot (phones here are BEHIND)",
+            )
+        )
+        spinMinRelays.adapter = adapter(
             listOf(
                 "0 times - accept all (normal use)",
                 "1 time  (phone C in A→B→C)",
@@ -54,7 +77,6 @@ class MainActivity : AppCompatActivity() {
             )
         )
 
-        // Long range needs Bluetooth 5 "Coded PHY" support
         val bt = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).adapter
         val coded = bt != null && bt.isLeCodedPhySupported && bt.isLeExtendedAdvertisingSupported
         if (!coded) {
@@ -66,11 +88,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnRelay).setOnClickListener { start(MeshService.ACTION_RELAY) }
         findViewById<Button>(R.id.btnStop).setOnClickListener {
             if (MeshBus.running != null) {
-                // Ambulance sends "trip ended" for a few seconds before stopping
                 startService(Intent(this, MeshService::class.java).setAction(MeshService.ACTION_STOP))
             }
         }
     }
+
+    private fun adapter(items: List<String>) =
+        ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, items)
 
     override fun onResume() {
         super.onResume()
@@ -89,7 +113,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStatus() {
         status.text = when (MeshBus.running) {
-            "AMBULANCE" -> "Running: AMBULANCE (sending every 1 s)"
+            "AMBULANCE" -> "Running: SOURCE (sending every 1 s)"
             "RELAY" -> "Running: RECEIVER + RELAY (listening)"
             else -> "Stopped"
         }
@@ -102,40 +126,55 @@ class MainActivity : AppCompatActivity() {
             return
         }
         alert.text = text
-        alert.setBackgroundColor(Color.parseColor(if (MeshBus.lastAlertDanger) "#D32F2F" else "#2E7D32"))
+        val (bg, fg) = when (MeshBus.lastAlertLevel) {
+            MeshBus.LEVEL_AMBER -> "#FFB300" to "#000000"
+            MeshBus.LEVEL_GREEN -> "#2E7D32" to "#FFFFFF"
+            else -> "#D32F2F" to "#FFFFFF"
+        }
+        alert.setBackgroundColor(Color.parseColor(bg))
+        alert.setTextColor(Color.parseColor(fg))
         alert.visibility = View.VISIBLE
     }
 
     // ---------- start with permissions ----------
 
-    private fun neededPermissions(): Array<String> {
-        val list = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT <= 30) {
-            list += Manifest.permission.ACCESS_FINE_LOCATION   // old phones only
-        } else {
-            list += Manifest.permission.BLUETOOTH_SCAN
-            list += Manifest.permission.BLUETOOTH_ADVERTISE
-            list += Manifest.permission.BLUETOOTH_CONNECT
-        }
+    private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    private fun bluetoothPermissions(): List<String> =
+        if (Build.VERSION.SDK_INT >= 31) listOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.BLUETOOTH_CONNECT,
+        ) else listOf(Manifest.permission.ACCESS_FINE_LOCATION)   // old phones need location for Bluetooth scanning
+
+    private fun allWanted(): List<String> {
+        val list = bluetoothPermissions().toMutableList()
+        list += Manifest.permission.ACCESS_FINE_LOCATION       // for the direction check (optional on receivers)
+        list += Manifest.permission.ACCESS_COARSE_LOCATION
         if (Build.VERSION.SDK_INT >= 33) list += Manifest.permission.POST_NOTIFICATIONS
-        return list.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }.toTypedArray()
+        return list.distinct()
     }
 
     private fun start(action: String, askIfMissing: Boolean = true) {
-        val missing = neededPermissions()
-        // Notifications are optional; Bluetooth permissions are required.
-        val missingRequired = missing.filter { it != Manifest.permission.POST_NOTIFICATIONS }
+        val missing = allWanted().filter { !granted(it) }
         if (missing.isNotEmpty() && askIfMissing) {
             pendingAction = action
-            ActivityCompat.requestPermissions(this, missing, 1)
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1)
             return
         }
-        if (missingRequired.isNotEmpty()) {
+        if (bluetoothPermissions().any { !granted(it) }) {
             Toast.makeText(this, "Bluetooth permissions are needed", Toast.LENGTH_LONG).show()
             return
         }
+        val hasLocation = granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (action == MeshService.ACTION_AMBULANCE && !hasLocation) {
+            Toast.makeText(this, "The source phone needs Location permission (to send the ambulance position)", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (action == MeshService.ACTION_RELAY && !hasLocation) {
+            Toast.makeText(this, "No location permission: you will only get soft 'be alert' warnings", Toast.LENGTH_LONG).show()
+        }
+
         val i = Intent(this, MeshService::class.java)
             .setAction(action)
             .putExtra(MeshService.EXTRA_MAX_HOPS, if (chkFiveHops.isChecked) 5 else 3)
@@ -143,6 +182,9 @@ class MainActivity : AppCompatActivity() {
             .putExtra(MeshService.EXTRA_MIN_RELAYS, spinMinRelays.selectedItemPosition)
             .putExtra(MeshService.EXTRA_SHORT_RANGE, chkShortRange.isChecked)
             .putExtra(MeshService.EXTRA_LONG_RANGE, chkLongRange.isChecked)
+            .putExtra(MeshService.EXTRA_AMB_HEADING, headings[spinAmbHeading.selectedItemPosition].second)
+            .putExtra(MeshService.EXTRA_AMB_POS, spinAmbPos.selectedItemPosition)
+            .putExtra(MeshService.EXTRA_MY_HEADING, headings[spinMyHeading.selectedItemPosition].second)
         ContextCompat.startForegroundService(this, i)
     }
 

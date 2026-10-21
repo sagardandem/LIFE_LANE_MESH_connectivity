@@ -17,8 +17,9 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("LifeLane BLE").font(.largeTitle).bold()
+            Text("LIFELANE").font(.largeTitle).bold()
             Text(r.status).font(.headline).foregroundColor(.secondary)
+            Text(r.gpsStatus).font(.subheadline).foregroundColor(.secondary)
 
             bannerView
 
@@ -46,21 +47,23 @@ struct ContentView: View {
         switch r.banner {
         case .none:
             EmptyView()
-        case .danger(let text):
-            box("AMBULANCE NEARBY\nGive way\n\n\(text)", color: .red)
+        case .red(let text):
+            box("AMBULANCE APPROACHING\nGive way\n\n\(text)", bg: .red, fg: .white)
+        case .amber(let text):
+            box("AMBULANCE NEARBY\nBe alert\n\n\(text)", bg: .orange, fg: .black)
         case .passed:
-            box("AMBULANCE PASSED\nAlert cleared", color: .green)
+            box("AMBULANCE PASSED\nAlert cleared", bg: .green, fg: .white)
         }
     }
 
-    private func box(_ text: String, color: Color) -> some View {
+    private func box(_ text: String, bg: Color, fg: Color) -> some View {
         Text(text)
             .font(.title3)
             .multilineTextAlignment(.center)
-            .foregroundColor(.white)
+            .foregroundColor(fg)
             .frame(maxWidth: .infinity)
             .padding()
-            .background(color)
+            .background(bg)
             .cornerRadius(8)
     }
 }
