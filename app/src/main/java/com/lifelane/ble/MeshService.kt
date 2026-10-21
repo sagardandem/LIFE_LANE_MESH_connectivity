@@ -332,8 +332,17 @@ class MeshService : Service() {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val data = result.scanRecord?.getManufacturerSpecificData(AlertMessage.COMPANY_ID)
-            val msg = AlertMessage.fromBytes(data) ?: return
-            handler.post { onMessage(msg, result.rssi) }
+            val msg = AlertMessage.fromBytes(data)
+            if (msg != null) {
+                handler.post { onMessage(msg, result.rssi) }
+                return
+            }
+            // iPhone short message (iPhone as Source or Relay, app open on screen)
+            val raw = CompactMessage.find(result.scanRecord) ?: return
+            handler.post {
+                val seq16 = CompactMessage.expandSeq(raw.seq8, latestSeq[raw.tripId])
+                onMessage(CompactMessage.toAlert(raw, seq16), result.rssi)
+            }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -364,13 +373,16 @@ class MeshService : Service() {
         if (fastScan == fast) return
         runCatching { scanner?.stopScan(scanCallback) }
         val filter = ScanFilter.Builder().setServiceUuid(AlertMessage.SERVICE_UUID).build()
+        // iPhones send a short message whose service ID starts with "LIFE"
+        val iphoneFilter = ScanFilter.Builder()
+            .setServiceUuid(CompactMessage.FILTER_UUID, CompactMessage.FILTER_MASK).build()
         val b = ScanSettings.Builder()
             .setScanMode(if (fast) ScanSettings.SCAN_MODE_LOW_LATENCY else ScanSettings.SCAN_MODE_BALANCED)
         if (codedSupported) {
             b.setLegacy(false)
             b.setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
         }
-        scanner?.startScan(listOf(filter), b.build(), scanCallback)
+        scanner?.startScan(listOf(filter, iphoneFilter), b.build(), scanCallback)
         fastScan = fast
         MeshBus.log(if (fast) "Scan: FAST (ambulance nearby)" else "Scan: SLOW (battery saver)")
     }

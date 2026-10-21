@@ -24,7 +24,33 @@ Version 2 is **not compatible** with version 1 – install the new APK on all ph
 **scan response**. iPhones can only scan in the background for a specific service ID, so this is what lets a
 locked iPhone get alerts. Long-range broadcasts carry both in one packet.
 
-## Version 4 – travel buddy + fixes (latest)
+## iPhone: Source and Relay too (latest)
+The iPhone app now has the same buttons and test settings as Android: **Start as SOURCE**, **Start as RECEIVER + RELAY**,
+ambulance direction/position, my direction, chain test, FAKE test.
+
+| iPhone role | Works? |
+|---|---|
+| Receiver (all colours, direction, travel buddy, passed, fake check) | ✅ also when locked |
+| Source (ambulance) | ✅ only while the app is **open on screen** |
+| Relay | ✅ only while the app is **open on screen** |
+
+Why: Apple only lets apps broadcast a service ID + a name (28 bytes), and nothing Android can read in the background.
+So the iPhone sends a **short message**: the alert packed into one 128-bit service ID starting with `LIFE`
+(16 bytes) + an 8-character name (rest of the signature). Position precision ~11 m (India range). Android reads it
+(`CompactMessage.kt`, scan filter on the `LIFE` prefix) and relays it in the normal 27-byte format. The iPhone
+listens to everything while open, and only to the LIFELANE service ID when in the background.
+
+### iPhone Source tests
+| Test | Expected |
+|---|---|
+| iPhone: Start as SOURCE, N / BEFORE, app open. Android B: my direction North | B 🔴 RED, log DIRECT |
+| Lock the iPhone Source | B's alert clears after ~15 s (iPhone can't send when locked) |
+| iPhone Source → Android B → Android C (chain test 1) | C 🔴 RELAYED 1x |
+| Android A Source → iPhone (Receiver, app open) → Android C (chain test 1) | C RELAYED 1x via the iPhone |
+| iPhone Source: Stop | B 🟢 passed |
+| iPhone Source with FAKE ticked | B log REJECTED fake alert |
+
+## Version 4 – travel buddy + fixes
 **Travel buddy:** phones that are SURE (GPS + direction) add their own decision to what they broadcast
 (RED = in the ambulance's way, CLEAR = not). A phone that is NOT sure (GPS off, or not moving) follows its
 "travel buddy": a sure phone it has heard **steadily for 10 s** with the strongest signal. Same-direction cars
@@ -37,6 +63,7 @@ can follow them. Copied decisions are never re-broadcast as "sure".
 - Direction remembered for **2 minutes** (car stopped at a signal still gets RED).
 - "Passed" rule: ambulance **more than 20 m past you** along its direction → 🟢 green (no need to stop the trip).
 - More than 100 m to the side of the ambulance's line → other road → silent.
+- Small turns no longer drop the alert: direction is **smoothed** (average of recent GPS readings), same direction = within **60°**, and RED is removed only after **3** "different direction" readings in a row.
 - Version 4 is not compatible with version 3 – update all phones.
 
 ### Travel-buddy tests
@@ -52,7 +79,7 @@ relays it, but each phone decides with **its own GPS** (no internet needed) whet
 
 | Level | When |
 |---|---|
-| 🔴 RED "Give way" | within 600 m, **ahead** of the ambulance (±60°), and moving the **same direction** (±45°) |
+| 🔴 RED "Give way" | within 600 m, **ahead** of the ambulance (±60°), and moving the **same direction** (±60°, direction smoothed) |
 | 🟡 AMBER "Be alert" | ahead but my direction unknown (not moving), or my GPS is off |
 | silent | behind / beside, opposite direction, or more than 600 m away |
 | 🟢 "Passed" | was alerted, now behind the ambulance, or trip ended |

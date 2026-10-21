@@ -130,3 +130,110 @@ enum Geo {
         return (.none, "different direction (\(Int(diff))°)")
     }
 }
+
+extension Geo {
+    /// Move a point `dist` metres in direction `bearing` (degrees).
+    static func offset(_ lat: Double, _ lon: Double, bearing: Double, dist: Double) -> (Double, Double) {
+        let r = 6_371_000.0, d = dist / r, b = bearing * .pi / 180
+        let p1 = lat * .pi / 180, l1 = lon * .pi / 180
+        let p2 = asin(sin(p1) * cos(d) + cos(p1) * sin(d) * cos(b))
+        let l2 = l1 + atan2(sin(b) * sin(d) * cos(p1), cos(d) - sin(p1) * sin(p2))
+        return (p2 * 180 / .pi, l2 * 180 / .pi)
+    }
+}
+
+/// Short message an iPhone sends (as Source or Relay). Must match CompactMessage.kt on Android.
+///
+/// Apple only lets apps broadcast service IDs and a name (28 bytes, app on screen only), so the alert
+/// is hidden inside one 128-bit service ID (16 bytes) + an 8-character name.
+///  0..3   "LIFE"
+///  4      high 4 bits version (1) | bit 3 type (0 alert, 1 ended) | bits 0-2 hopsLeft
+///  5..6   tripId (16 bits)
+///  7      seq (low 8 bits)
+///  8..12  latitude*10,000 (20 bits) then (longitude-40)*10,000 (20 bits)
+///  13     heading (0..255)
+///  14..15 signature bytes 1-2;  name = signature bytes 3-6 as 8 hex characters
+enum Compact {
+    static let maxHops = 3
+    private static let key = SymmetricKey(data: Data("LifeLane-demo-key-2026".utf8))
+
+    struct Raw {
+        let tripId: UInt32
+        let seq8: UInt8
+        let type: Int
+        let hopsLeft: Int
+        let lat: Double
+        let lon: Double
+        let heading: Double
+        let genuine: Bool
+
+        func toAlert(seq: UInt16) -> AlertMessage {
+            AlertMessage(tripId: tripId, seq: seq, maxHops: Compact.maxHops, type: type,
+                         lat: lat, lon: lon, heading: heading, hopsLeft: hopsLeft,
+                         senderId: 0, senderLevel: AlertMessage.lvlUnknown, genuine: genuine)
+        }
+    }
+
+    private static func mac(_ b: [UInt8]) -> [UInt8] {
+        var s = Array(b[0..<14])
+        s[4] &= 0xF8                       // hopsLeft is not signed (relays change it)
+        return Array(Data(HMAC<SHA256>.authenticationCode(for: Data(s), using: key)))
+    }
+
+    static func encode(tripId: UInt32, seq: UInt16, type: Int, hopsLeft: Int,
+                       lat: Double, lon: Double, heading: Double, fake: Bool) -> (CBUUID, String) {
+        var b = [UInt8](repeating: 0, count: 16)
+        b[0] = 0x4C; b[1] = 0x49; b[2] = 0x46; b[3] = 0x45
+        b[4] = UInt8((1 << 4) | ((type & 1) << 3) | (min(hopsLeft, 7) & 7))
+        b[5] = UInt8((tripId >> 8) & 0xFF)
+        b[6] = UInt8(tripId & 0xFF)
+        b[7] = UInt8(seq & 0xFF)
+        let latU = UInt64(min(1_048_575.0, max(0.0, (lat * 10_000).rounded())))
+        let lonU = UInt64(min(1_048_575.0, max(0.0, ((lon - 40) * 10_000).rounded())))
+        let pos = (latU << 20) | lonU
+        for i in 0..<5 { b[8 + i] = UInt8((pos >> UInt64(8 * (4 - i))) & 0xFF) }
+        let norm = (heading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        b[13] = UInt8(Int((norm * 256 / 360).rounded()) & 0xFF)
+        let m = fake ? [UInt8](repeating: 0x5A, count: 32) : mac(b)
+        b[14] = m[0]; b[15] = m[1]
+        let name = m[2..<6].map { String(format: "%02x", $0) }.joined()
+        return (CBUUID(data: Data(b)), name)
+    }
+
+    static func find(uuids: [CBUUID], name: String?) -> Raw? {
+        for u in uuids {
+            let b = [UInt8](u.data)
+            if b.count == 16 && b[0] == 0x4C && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x45 {
+                return decode(b, name: name)
+            }
+        }
+        return nil
+    }
+
+    private static func decode(_ b: [UInt8], name: String?) -> Raw? {
+        guard (b[4] >> 4) & 0x0F == 1 else { return nil }
+        let type = Int((b[4] >> 3) & 1)
+        let hops = min(Int(b[4] & 7), maxHops)
+        let trip = (UInt32(b[5]) << 8) | UInt32(b[6])
+        var pos: UInt64 = 0
+        for i in 8...12 { pos = (pos << 8) | UInt64(b[i]) }
+        let lat = Double((pos >> 20) & 0xFFFFF) / 10_000
+        let lon = Double(pos & 0xFFFFF) / 10_000 + 40
+        let heading = Double(b[13]) * 360 / 256
+        let m = mac(b)
+        let expName = m[2..<6].map { String(format: "%02x", $0) }.joined()
+        var nameOk = false
+        if let n = name, n.count >= 8 { nameOk = n.prefix(8).lowercased() == expName }
+        let genuine = nameOk && m[0] == b[14] && m[1] == b[15]
+        return Raw(tripId: trip, seq8: b[7], type: type, hopsLeft: hops,
+                   lat: lat, lon: lon, heading: heading, genuine: genuine)
+    }
+
+    /// Rebuild the full message number from its low 8 bits, using the last one seen.
+    static func expandSeq(_ s8: UInt8, last: UInt16?) -> UInt16 {
+        guard let last = last else { return UInt16(s8) }
+        let d = (Int(s8) - Int(last & 0xFF)) & 0xFF
+        let v = d < 128 ? Int(last) + d : Int(last) - (256 - d)
+        return UInt16(truncatingIfNeeded: v & 0xFFFF)
+    }
+}
